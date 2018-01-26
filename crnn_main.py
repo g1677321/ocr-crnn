@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 from __future__ import print_function
 import argparse
 import random
@@ -11,36 +12,36 @@ from warpctc_pytorch import CTCLoss
 import os
 import utility.utils as utils
 import utility.dataset as dataset
-
+import utility.keys as keys
 import models.crnn as crnn
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--trainroot', required=True, help='path to dataset')
-parser.add_argument('--valroot', required=True, help='path to dataset')
-parser.add_argument('--workers', type=int, help='number of data loading workers', default=2)
-parser.add_argument('--batchSize', type=int, default=64, help='input batch size')
+parser.add_argument('--trainroot', help='path to dataset', default='./data/lmdb/train')
+parser.add_argument('--valroot', help='path to dataset', default='./data/lmdb/val')
+parser.add_argument('--workers', type=int, help='number of data loading workers', default=4)
+parser.add_argument('--batchSize', type=int, default=128, help='input batch size')
 parser.add_argument('--imgH', type=int, default=32, help='the height of the input image to network')
-parser.add_argument('--imgW', type=int, default=100, help='the width of the input image to network')
+parser.add_argument('--imgW', type=int, default=256, help='the width of the input image to network')
 parser.add_argument('--nh', type=int, default=256, help='size of the lstm hidden state')
 parser.add_argument('--niter', type=int, default=25, help='number of epochs to train for')
-parser.add_argument('--lr', type=float, default=0.01, help='learning rate for Critic, default=0.00005')
+parser.add_argument('--lr', type=float, default=0.005, help='learning rate for Critic, default=0.00005')
 parser.add_argument('--beta1', type=float, default=0.5, help='beta1 for adam. default=0.5')
 parser.add_argument('--cuda', action='store_true', help='enables cuda')
-parser.add_argument('--ngpu', type=int, default=1, help='number of GPUs to use')
-parser.add_argument('--crnn', default='', help="path to crnn (to continue training)")
-parser.add_argument('--alphabet', type=str, default='0123456789abcdefghijklmnopqrstuvwxyz')
+parser.add_argument('--ngpu', type=int, default=0, help='number of GPUs to use')
+parser.add_argument('--crnn', default='', help="path to pretrained-crnn (to continue training)")
+parser.add_argument('--alphabet', help='alphabet string', type=str)
 parser.add_argument('--experiment', default=None, help='Where to store samples and models')
-parser.add_argument('--displayInterval', type=int, default=500, help='Interval to be displayed')
-parser.add_argument('--n_test_disp', type=int, default=10, help='Number of samples to display when test')
-parser.add_argument('--valInterval', type=int, default=500, help='Interval to be displayed')
-parser.add_argument('--saveInterval', type=int, default=500, help='Interval to be displayed')
+parser.add_argument('--displayInterval', type=int, default=50, help='Interval to be displayed')
+parser.add_argument('--n_test_disp', type=int, default=1000, help='Number of samples to display when test')
+parser.add_argument('--valInterval', type=int, default=50, help='Interval to be displayed')
+parser.add_argument('--saveInterval', type=int, default=1000, help='Interval to be displayed')
 parser.add_argument('--adam', action='store_true', help='Whether to use adam (default is rmsprop)')
 parser.add_argument('--adadelta', action='store_true', help='Whether to use adadelta (default is rmsprop)')
 parser.add_argument('--keep_ratio', action='store_true', help='whether to keep ratio for image resize')
 parser.add_argument('--random_sample', action='store_true', help='whether to sample the dataset with random sampler')
 opt = parser.parse_args()
-print(opt)
-
+#print(opt)
+ifUnicode=True
 if opt.experiment is None:
     opt.experiment = 'expr'
 os.system('mkdir {0}'.format(opt.experiment))
@@ -68,12 +69,18 @@ train_loader = torch.utils.data.DataLoader(
     num_workers=int(opt.workers),
     collate_fn=dataset.alignCollate(imgH=opt.imgH, imgW=opt.imgW, keep_ratio=opt.keep_ratio))
 test_dataset = dataset.lmdbDataset(
-    root=opt.valroot, transform=dataset.resizeNormalize((100, 32)))
+    root=opt.valroot, transform=dataset.resizeNormalize((256, 32)))
 
-nclass = len(opt.alphabet) + 1
+ngpu = int(opt.ngpu)
+nh = int(opt.nh)
+if opt.alphabet is None:
+    alphabet = keys.alphabet
+else:
+    alphabet = opt.alphabet
+nclass = len(alphabet) + 1
 nc = 1
 
-converter = utils.strLabelConverter(opt.alphabet)
+converter = utils.strLabelConverter(alphabet)
 criterion = CTCLoss()
 
 
@@ -86,8 +93,7 @@ def weights_init(m):
         m.weight.data.normal_(1.0, 0.02)
         m.bias.data.fill_(0)
 
-
-crnn = crnn.CRNN(opt.imgH, nc, nclass, opt.nh)
+crnn = crnn.CRNN(opt.imgH, nc, nclass, nh, ngpu)
 crnn.apply(weights_init)
 if opt.crnn != '':
     print('loading pretrained model from %s' % opt.crnn)
@@ -100,7 +106,7 @@ length = torch.IntTensor(opt.batchSize)
 
 if opt.cuda:
     crnn.cuda()
-    crnn = torch.nn.DataParallel(crnn, device_ids=range(opt.ngpu))
+    #crnn = torch.nn.DataParallel(crnn, device_ids=range(opt.ngpu))
     image = image.cuda()
     criterion = criterion.cuda()
 
@@ -121,7 +127,7 @@ else:
     optimizer = optim.RMSprop(crnn.parameters(), lr=opt.lr)
 
 
-def val(net, dataset, criterion, max_iter=100):
+def val(net, dataset, criterion, max_iter=2):
     print('Start val')
 
     for p in crnn.parameters():
@@ -143,6 +149,8 @@ def val(net, dataset, criterion, max_iter=100):
         cpu_images, cpu_texts = data
         batch_size = cpu_images.size(0)
         utils.loadData(image, cpu_images)
+        if ifUnicode:
+             cpu_texts = [ clean_txt(tx.decode('utf-8'))  for tx in cpu_texts]
         t, l = converter.encode(cpu_texts)
         utils.loadData(text, t)
         utils.loadData(length, l)
@@ -157,20 +165,38 @@ def val(net, dataset, criterion, max_iter=100):
         preds = preds.transpose(1, 0).contiguous().view(-1)
         sim_preds = converter.decode(preds.data, preds_size.data, raw=False)
         for pred, target in zip(sim_preds, cpu_texts):
-            if pred == target.lower():
+            #if pred == target.lower():
+            if pred.strip() == target.strip():
                 n_correct += 1
 
     raw_preds = converter.decode(preds.data, preds_size.data, raw=True)[:opt.n_test_disp]
-    for raw_pred, pred, gt in zip(raw_preds, sim_preds, cpu_texts):
+    '''for raw_pred, pred, gt in zip(raw_preds, sim_preds, cpu_texts):
         print('%-20s => %-20s, gt: %-20s' % (raw_pred, pred, gt))
-
+    '''
     accuracy = n_correct / float(max_iter * opt.batchSize)
-    print('Test loss: %f, accuray: %f' % (loss_avg.val(), accuracy))
+    testLoss = loss_avg.val()
+    print('Test loss: %f, accuray: %f' % (testLoss, accuracy))
+    return testLoss,accuracy
 
+def clean_txt(txt):
+    """
+    filter char where not in alphabet with ' '
+    """
+    newTxt = u''
+    for t in txt:
+        if t in alphabet:
+            newTxt+=t
+        else:
+            newTxt+=u' '
+    return newTxt
 
-def trainBatch(net, criterion, optimizer):
+def trainBatch(net, criterion, optimizer, flage=False):
     data = train_iter.next()
     cpu_images, cpu_texts = data
+    #decode utf-8 to unicode
+    if ifUnicode:
+        cpu_texts = [ clean_txt(tx.decode('utf-8'))  for tx in cpu_texts]
+        
     batch_size = cpu_images.size(0)
     utils.loadData(image, cpu_images)
     t, l = converter.encode(cpu_texts)
@@ -182,31 +208,62 @@ def trainBatch(net, criterion, optimizer):
     cost = criterion(preds, text, preds_size, length) / batch_size
     crnn.zero_grad()
     cost.backward()
+    if flage:
+        lr = 0.0001
+        optimizer = optim.Adadelta(crnn.parameters(), lr=lr)
     optimizer.step()
     return cost
 
+num =0
+lasttestLoss = 10000
+testLoss = 10000
+import os
+
+def delete(path):
+    import os
+    import glob
+    paths = glob.glob(path+'/*.pth')
+    for p in paths:
+        os.remove(p)
+
+numLoss = 0##判断训练参数是否下降  
 
 for epoch in range(opt.niter):
     train_iter = iter(train_loader)
     i = 0
     while i < len(train_loader):
+        #print('The step{} ........\n'.format(i))
         for p in crnn.parameters():
             p.requires_grad = True
         crnn.train()
-
+        #if numLoss>50:
+        #    cost = trainBatch(crnn, criterion, optimizer,True)
+        #    numLoss = 0
+        #else:
         cost = trainBatch(crnn, criterion, optimizer)
         loss_avg.add(cost)
         i += 1
 
-        if i % opt.displayInterval == 0:
-            print('[%d/%d][%d/%d] Loss: %f' %
-                  (epoch, opt.niter, i, len(train_loader), loss_avg.val()))
-            loss_avg.reset()
+        #if i % opt.displayInterval == 0:
+        #    print('[%d/%d][%d/%d] Loss: %f' %
+        #          (epoch, opt.niter, i, len(train_loader), loss_avg.val()))
+        #    loss_avg.reset()
 
+        #if i % opt.displayInterval == 0:
         if i % opt.valInterval == 0:
-            val(crnn, test_dataset, criterion)
-
+            testLoss,accuracy = val(crnn, test_dataset, criterion)
+            #print('Test loss: %f, accuray: %f' % (testLoss, accuracy))
+            print("epoch:{},step:{},Test loss:{},accuracy:{},train loss:{}".format(epoch,num,testLoss,accuracy,loss_avg.val()))
+            loss_avg.reset()
         # do checkpointing
-        if i % opt.saveInterval == 0:
-            torch.save(
-                crnn.state_dict(), '{0}/netCRNN_{1}_{2}.pth'.format(opt.experiment, epoch, i))
+        num +=1
+        #lasttestLoss = min(lasttestLoss,testLoss)
+        
+        if lasttestLoss >testLoss:
+             print("The step {},last lost:{}, current: {},save model!".format(num,lasttestLoss,testLoss))
+             lasttestLoss = testLoss
+             #delete(opt.experiment)##删除历史模型
+             torch.save(crnn.state_dict(), '{}/netCRNN.pth'.format(opt.experiment))
+             numLoss = 0
+        else:
+            numLoss+=1

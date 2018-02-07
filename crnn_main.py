@@ -14,6 +14,8 @@ import utility.utils as utils
 import utility.dataset as dataset
 import utility.keys as keys
 import models.crnn as crnn
+import time
+import json
 
 parser = argparse.ArgumentParser()
 parser.add_argument('--trainroot', help='path to dataset', default='./data/lmdb/train')
@@ -31,7 +33,7 @@ parser.add_argument('--ngpu', type=int, default=0, help='number of GPUs to use')
 parser.add_argument('--crnn', default='', help="path to pretrained-crnn (to continue training)")
 parser.add_argument('--alphabet', help='alphabet string', type=str)
 parser.add_argument('--experiment', default=None, help='Where to store samples and models')
-parser.add_argument('--displayInterval', type=int, default=50, help='Interval to be displayed')
+#parser.add_argument('--displayInterval', type=int, default=50, help='Interval to be displayed')
 parser.add_argument('--n_test_disp', type=int, default=1000, help='Number of samples to display when test')
 parser.add_argument('--valInterval', type=int, default=50, help='Interval to be displayed')
 parser.add_argument('--saveInterval', type=int, default=1000, help='Interval to be displayed')
@@ -40,11 +42,17 @@ parser.add_argument('--adadelta', action='store_true', help='Whether to use adad
 parser.add_argument('--keep_ratio', action='store_true', help='whether to keep ratio for image resize')
 parser.add_argument('--random_sample', action='store_true', help='whether to sample the dataset with random sampler')
 opt = parser.parse_args()
-#print(opt)
+print(opt)
 ifUnicode=True
+
 if opt.experiment is None:
-    opt.experiment = 'expr'
-os.system('mkdir {0}'.format(opt.experiment))
+    #print (time.strftime("%y%m%d_%H_%M_%S", time.localtime()))
+    opt.experiment = 'expr/' + time.strftime("%y%m%d_%H_%M_%S", time.localtime())
+os.system('mkdir -p expr')
+os.system('mkdir -p {}'.format(opt.experiment))
+
+#計時
+t = time.time()
 
 opt.manualSeed = random.randint(1, 10000)  # fix seed
 print("Random Seed: ", opt.manualSeed)
@@ -63,6 +71,9 @@ if not opt.random_sample:
     sampler = dataset.randomSequentialSampler(train_dataset, opt.batchSize)
 else:
     sampler = None
+
+print ("Traing set:{} samples".format(train_dataset.nSamples))
+
 train_loader = torch.utils.data.DataLoader(
     train_dataset, batch_size=opt.batchSize,
     shuffle=True, sampler=sampler,
@@ -97,7 +108,13 @@ crnn = crnn.CRNN(opt.imgH, nc, nclass, nh, ngpu)
 crnn.apply(weights_init)
 if opt.crnn != '':
     print('loading pretrained model from %s' % opt.crnn)
-    crnn.load_state_dict(torch.load(opt.crnn))
+    #crnn.load_state_dict(torch.load(opt.crnn))
+    # Change dims
+    pretrained_dict = torch.load(opt.crnn)
+    model_dict = crnn.state_dict()
+    pretrained_dict = {k: v for k, v in pretrained_dict.items() if k in model_dict and v.size() == model_dict[k].size()}
+    model_dict.update(pretrained_dict)
+    crnn.load_state_dict(model_dict)
 print(crnn)
 
 image = torch.FloatTensor(opt.batchSize, 3, opt.imgH, opt.imgH)
@@ -143,6 +160,7 @@ def val(net, dataset, criterion, max_iter=2):
     loss_avg = utils.averager()
 
     max_iter = min(max_iter, len(data_loader))
+    #max_iter = len(data_loader)
     for i in range(max_iter):
         data = val_iter.next()
         i += 1
@@ -161,19 +179,22 @@ def val(net, dataset, criterion, max_iter=2):
         loss_avg.add(cost)
 
         _, preds = preds.max(2)
-        preds = preds.squeeze(2)
+        # pytorch < v0.1.2 bug used
+        # preds = preds.squeeze(2)
         preds = preds.transpose(1, 0).contiguous().view(-1)
         sim_preds = converter.decode(preds.data, preds_size.data, raw=False)
-        for pred, target in zip(sim_preds, cpu_texts):
+        #print('pred={}, target={}'.format(sim_preds, text))
+	for pred, target in zip(sim_preds, cpu_texts):
             #if pred == target.lower():
-            if pred.strip() == target.strip():
+	    if pred.strip() == target.strip():
                 n_correct += 1
 
     raw_preds = converter.decode(preds.data, preds_size.data, raw=True)[:opt.n_test_disp]
     '''for raw_pred, pred, gt in zip(raw_preds, sim_preds, cpu_texts):
         print('%-20s => %-20s, gt: %-20s' % (raw_pred, pred, gt))
     '''
-    accuracy = n_correct / float(max_iter * opt.batchSize)
+    print('n_correct={} max_iter={} opt.batchSize={}'.format(n_correct, max_iter, opt.batchSize))
+    accuracy = float(n_correct) / float(max_iter * opt.batchSize)
     testLoss = loss_avg.val()
     print('Test loss: %f, accuray: %f' % (testLoss, accuracy))
     return testLoss,accuracy
@@ -250,20 +271,35 @@ for epoch in range(opt.niter):
         #    loss_avg.reset()
 
         #if i % opt.displayInterval == 0:
+        '''
         if i % opt.valInterval == 0:
             testLoss,accuracy = val(crnn, test_dataset, criterion)
             #print('Test loss: %f, accuray: %f' % (testLoss, accuracy))
             print("epoch:{},step:{},Test loss:{},accuracy:{},train loss:{}".format(epoch,num,testLoss,accuracy,loss_avg.val()))
             loss_avg.reset()
+        '''
         # do checkpointing
         num +=1
         #lasttestLoss = min(lasttestLoss,testLoss)
-        
+        '''
         if lasttestLoss >testLoss:
              print("The step {},last lost:{}, current: {},save model!".format(num,lasttestLoss,testLoss))
              lasttestLoss = testLoss
              #delete(opt.experiment)##删除历史模型
-             torch.save(crnn.state_dict(), '{}/netCRNN.pth'.format(opt.experiment))
+             torch.save(crnn.state_dict(), '{}/model_{}.pth'.format(opt.experiment, epoch))
              numLoss = 0
         else:
             numLoss+=1
+        '''
+
+    # Save models each epochs
+
+    testLoss, accuracy = val(crnn, test_dataset, criterion)
+    logfile = open('{}/model_{}.log'.format(opt.experiment, epoch), 'a')
+    logfile.write(json.dumps({'epoch': epoch, 'step': num, 'test loss': testLoss, 'accuracy': accuracy, 'train loss': loss_avg.val()}))
+    logfile.close()
+    loss_avg.reset()
+    torch.save(crnn.state_dict(), '{}/model_{}.pth'.format(opt.experiment, epoch))
+
+
+print ("It takes time:{}s".format(time.time()-t))

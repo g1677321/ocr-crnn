@@ -50,6 +50,7 @@ if opt.experiment is None:
     opt.experiment = 'expr/' + time.strftime("%y%m%d_%H_%M_%S", time.localtime())
 os.system('mkdir -p expr')
 os.system('mkdir -p {}'.format(opt.experiment))
+os.system('mkdir -p {}/batch'.format(opt.experiment))
 
 #計時
 t = time.time()
@@ -108,13 +109,13 @@ crnn = crnn.CRNN(opt.imgH, nc, nclass, nh, ngpu)
 crnn.apply(weights_init)
 if opt.crnn != '':
     print('loading pretrained model from %s' % opt.crnn)
-    #crnn.load_state_dict(torch.load(opt.crnn))
+    crnn.load_state_dict(torch.load(opt.crnn))
     # Change dims
-    pretrained_dict = torch.load(opt.crnn)
-    model_dict = crnn.state_dict()
-    pretrained_dict = {k: v for k, v in pretrained_dict.items() if k in model_dict and v.size() == model_dict[k].size()}
-    model_dict.update(pretrained_dict)
-    crnn.load_state_dict(model_dict)
+    #pretrained_dict = torch.load(opt.crnn)
+    #model_dict = crnn.state_dict()
+    #pretrained_dict = {k: v for k, v in pretrained_dict.items() if k in model_dict and v.size() == model_dict[k].size()}
+    #model_dict.update(pretrained_dict)
+    #crnn.load_state_dict(model_dict)
 print(crnn)
 
 image = torch.FloatTensor(opt.batchSize, 3, opt.imgH, opt.imgH)
@@ -184,9 +185,9 @@ def val(net, dataset, criterion, max_iter=2):
         preds = preds.transpose(1, 0).contiguous().view(-1)
         sim_preds = converter.decode(preds.data, preds_size.data, raw=False)
         #print('pred={}, target={}'.format(sim_preds, text))
-	for pred, target in zip(sim_preds, cpu_texts):
+    for pred, target in zip(sim_preds, cpu_texts):
             #if pred == target.lower():
-	    if pred.strip() == target.strip():
+        if pred.strip() == target.strip():
                 n_correct += 1
 
     raw_preds = converter.decode(preds.data, preds_size.data, raw=True)[:opt.n_test_disp]
@@ -271,13 +272,17 @@ for epoch in range(opt.niter):
         #    loss_avg.reset()
 
         #if i % opt.displayInterval == 0:
-        '''
+        
         if i % opt.valInterval == 0:
-            testLoss,accuracy = val(crnn, test_dataset, criterion)
-            #print('Test loss: %f, accuray: %f' % (testLoss, accuracy))
+            testLoss, accuracy = val(crnn, test_dataset, criterion)
             print("epoch:{},step:{},Test loss:{},accuracy:{},train loss:{}".format(epoch,num,testLoss,accuracy,loss_avg.val()))
+            logfile = open('{}/batch/model.log'.format(opt.experiment), 'a')
+            logfile.write(json.dumps({'epoch': epoch, 'step': num, 'test loss': testLoss, 'accuracy': accuracy, 'train loss': loss_avg.val()}))
+            logfile.write(',')
+            logfile.close()
             loss_avg.reset()
-        '''
+            torch.save(crnn.state_dict(), '{}/batch/model_{}_b{}.pth'.format(opt.experiment, epoch, i))
+        
         # do checkpointing
         num +=1
         #lasttestLoss = min(lasttestLoss,testLoss)
@@ -293,10 +298,11 @@ for epoch in range(opt.niter):
         '''
 
     # Save models each epochs
-
     testLoss, accuracy = val(crnn, test_dataset, criterion)
-    logfile = open('{}/model_{}.log'.format(opt.experiment, epoch), 'a')
+    print("epoch:{},step:{},Test loss:{},accuracy:{},train loss:{}".format(epoch, num, testLoss, accuracy, loss_avg.val()))
+    logfile = open('{}/model.log'.format(opt.experiment), 'a')
     logfile.write(json.dumps({'epoch': epoch, 'step': num, 'test loss': testLoss, 'accuracy': accuracy, 'train loss': loss_avg.val()}))
+    logfile.write(',')
     logfile.close()
     loss_avg.reset()
     torch.save(crnn.state_dict(), '{}/model_{}.pth'.format(opt.experiment, epoch))

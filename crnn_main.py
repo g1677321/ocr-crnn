@@ -133,7 +133,8 @@ text = Variable(text)
 length = Variable(length)
 
 # loss averager
-loss_avg = utils.averager()
+loss_avg_step = utils.averager()
+loss_avg_epoch = utils.averager()
 
 # setup optimizer
 if opt.adam:
@@ -146,7 +147,7 @@ else:
 
 
 def val(net, dataset, criterion, max_iter=2):
-    print('Start val')
+    #print('Start val')
 
     for p in crnn.parameters():
         p.requires_grad = False
@@ -156,7 +157,6 @@ def val(net, dataset, criterion, max_iter=2):
         dataset, shuffle=True, batch_size=opt.batchSize, num_workers=int(opt.workers))
     val_iter = iter(data_loader)
 
-    i = 0
     n_correct = 0
     loss_avg = utils.averager()
 
@@ -185,19 +185,19 @@ def val(net, dataset, criterion, max_iter=2):
         preds = preds.transpose(1, 0).contiguous().view(-1)
         sim_preds = converter.decode(preds.data, preds_size.data, raw=False)
         #print('pred={}, target={}'.format(sim_preds, text))
-    for pred, target in zip(sim_preds, cpu_texts):
+	for pred, target in zip(sim_preds, cpu_texts):
             #if pred == target.lower():
-        if pred.strip() == target.strip():
+	    if pred.strip() == target.strip():
                 n_correct += 1
 
     raw_preds = converter.decode(preds.data, preds_size.data, raw=True)[:opt.n_test_disp]
     '''for raw_pred, pred, gt in zip(raw_preds, sim_preds, cpu_texts):
         print('%-20s => %-20s, gt: %-20s' % (raw_pred, pred, gt))
     '''
-    print('n_correct={} max_iter={} opt.batchSize={}'.format(n_correct, max_iter, opt.batchSize))
+    #print('n_correct={} max_iter={} opt.batchSize={}'.format(n_correct, max_iter, opt.batchSize))
     accuracy = float(n_correct) / float(max_iter * opt.batchSize)
     testLoss = loss_avg.val()
-    print('Test loss: %f, accuray: %f' % (testLoss, accuracy))
+    print('VAL_LOG:Test loss: %f, accuray: %f' % (testLoss, accuracy))
     return testLoss,accuracy
 
 def clean_txt(txt):
@@ -236,11 +236,6 @@ def trainBatch(net, criterion, optimizer, flage=False):
     optimizer.step()
     return cost
 
-num =0
-lasttestLoss = 10000
-testLoss = 10000
-import os
-
 def delete(path):
     import os
     import glob
@@ -248,64 +243,49 @@ def delete(path):
     for p in paths:
         os.remove(p)
 
-numLoss = 0##判断训练参数是否下降  
+#numLoss = 0##判断训练参数是否下降
+#print("Batch count = {}".format(len(train_loader)))
 
 for epoch in range(opt.niter):
     train_iter = iter(train_loader)
-    i = 0
-    while i < len(train_loader):
-        #print('The step{} ........\n'.format(i))
+
+    for step in range(len(train_loader)):
+        #print('The step{} ........\n'.format(step))
         for p in crnn.parameters():
             p.requires_grad = True
         crnn.train()
-        #if numLoss>50:
-        #    cost = trainBatch(crnn, criterion, optimizer,True)
-        #    numLoss = 0
-        #else:
+
         cost = trainBatch(crnn, criterion, optimizer)
-        loss_avg.add(cost)
-        i += 1
+        loss_avg_step.add(cost)
+        loss_avg_epoch.add(cost)
 
-        #if i % opt.displayInterval == 0:
+        #if step % opt.displayInterval == 0:
         #    print('[%d/%d][%d/%d] Loss: %f' %
-        #          (epoch, opt.niter, i, len(train_loader), loss_avg.val()))
-        #    loss_avg.reset()
+        #          (epoch, opt.niter, step, len(train_loader), loss_avg_step.val()))
+        #    loss_avg_step.reset()
 
-        #if i % opt.displayInterval == 0:
+        #if step % opt.displayInterval == 0:
+
         
-        if i % opt.valInterval == 0:
+        if step % opt.valInterval == 0 and step != 0:
             testLoss, accuracy = val(crnn, test_dataset, criterion)
-            print("epoch:{},step:{},Test loss:{},accuracy:{},train loss:{}".format(epoch,num,testLoss,accuracy,loss_avg.val()))
+            print("STEP_LOG: Epoch:{},step:{:>10},Test loss:{:>15},Accuracy:{:>15},Train loss:{:>15}".format(epoch,step,testLoss,accuracy,loss_avg_step.val()))
             logfile = open('{}/batch/model.log'.format(opt.experiment), 'a')
-            logfile.write(json.dumps({'epoch': epoch, 'step': num, 'test loss': testLoss, 'accuracy': accuracy, 'train loss': loss_avg.val()}))
-            logfile.write(',')
+            logfile.write(json.dumps({'epoch': epoch, 'step': step, 'test loss': testLoss, 'accuracy': accuracy, 'train loss': loss_avg_step.val()})+'\n')
             logfile.close()
-            loss_avg.reset()
-            torch.save(crnn.state_dict(), '{}/batch/model_{}_b{}.pth'.format(opt.experiment, epoch, i))
-        
-        # do checkpointing
-        num +=1
-        #lasttestLoss = min(lasttestLoss,testLoss)
-        '''
-        if lasttestLoss >testLoss:
-             print("The step {},last lost:{}, current: {},save model!".format(num,lasttestLoss,testLoss))
-             lasttestLoss = testLoss
-             #delete(opt.experiment)##删除历史模型
-             torch.save(crnn.state_dict(), '{}/model_{}.pth'.format(opt.experiment, epoch))
-             numLoss = 0
-        else:
-            numLoss+=1
-        '''
+
+            loss_avg_step.reset()
+            torch.save(crnn.state_dict(), '{}/batch/model_e{}_b{}.pth'.format(opt.experiment, epoch, step))
+
 
     # Save models each epochs
     testLoss, accuracy = val(crnn, test_dataset, criterion)
-    print("epoch:{},step:{},Test loss:{},accuracy:{},train loss:{}".format(epoch, num, testLoss, accuracy, loss_avg.val()))
+    print("Epoch_LOG: Epoch:{},Test loss:{:>15},Accuracy:{:>15},Train loss:{:>15}".format(epoch, testLoss, accuracy, loss_avg_epoch.val()))
     logfile = open('{}/model.log'.format(opt.experiment), 'a')
-    logfile.write(json.dumps({'epoch': epoch, 'step': num, 'test loss': testLoss, 'accuracy': accuracy, 'train loss': loss_avg.val()}))
-    logfile.write(',')
+    logfile.write(json.dumps({'epoch': epoch, 'test loss': testLoss, 'accuracy': accuracy, 'train loss': loss_avg_epoch.val()})+'\n')
     logfile.close()
-    loss_avg.reset()
-    torch.save(crnn.state_dict(), '{}/model_{}.pth'.format(opt.experiment, epoch))
+    loss_avg_epoch.reset()
+    torch.save(crnn.state_dict(), '{}/model_e{}.pth'.format(opt.experiment, epoch))
 
 
 print ("It takes time:{}s".format(time.time()-t))

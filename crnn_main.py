@@ -147,6 +147,8 @@ else:
 
 
 def val(net, dataset, criterion, max_iter=2):
+    # VAL計時
+    t_val = time.time()
     #print('Start val')
 
     for p in crnn.parameters():
@@ -197,7 +199,8 @@ def val(net, dataset, criterion, max_iter=2):
     #print('n_correct={} max_iter={} opt.batchSize={}'.format(n_correct, max_iter, opt.batchSize))
     accuracy = float(n_correct) / float(max_iter * opt.batchSize)
     testLoss = loss_avg.val()
-    print('VAL_LOG:Test loss: %f, accuray: %f' % (testLoss, accuracy))
+    t_val = time.time() - t_val
+    print('VAL_LOG:Test loss: %f, accuray: %f, time: %f' % (testLoss, accuracy, t_val))
     return testLoss,accuracy
 
 def clean_txt(txt):
@@ -247,9 +250,13 @@ def delete(path):
 #print("Batch count = {}".format(len(train_loader)))
 
 for epoch in range(opt.niter):
+    # Epoch計時
+    t_epoch = time.time()
     train_iter = iter(train_loader)
 
     for step in range(len(train_loader)):
+        # Step計時
+        t_step = time.time()
         #print('The step{} ........\n'.format(step))
         for p in crnn.parameters():
             p.requires_grad = True
@@ -266,23 +273,25 @@ for epoch in range(opt.niter):
 
         #if step % opt.displayInterval == 0:
 
+        t_step = time.time() - t_step
         
         if step % opt.valInterval == 0 and step != 0:
             testLoss, accuracy = val(crnn, test_dataset, criterion)
-            print("STEP_LOG: Epoch:{},step:{:>10},Test loss:{:>15},Accuracy:{:>15},Train loss:{:>15}".format(epoch,step,testLoss,accuracy,loss_avg_step.val()))
+            print("STEP_LOG: Epoch:{},step:{:>10},Test loss:{:>15},Accuracy:{:>15},Train loss:{:>15},Time:{:>10}".format(epoch,step,testLoss,accuracy,loss_avg_step.val(),t_step))
             logfile = open('{}/batch/model.log'.format(opt.experiment), 'a')
-            logfile.write(json.dumps({'epoch': epoch, 'step': step, 'test loss': testLoss, 'accuracy': accuracy, 'train loss': loss_avg_step.val()})+'\n')
+            logfile.write(json.dumps({'epoch': epoch, 'step': step, 'test loss': testLoss, 'accuracy': accuracy, 'train loss': loss_avg_step.val(), 'time': t_step})+'\n')
             logfile.close()
 
             loss_avg_step.reset()
             torch.save(crnn.state_dict(), '{}/batch/model_e{}_b{}.pth'.format(opt.experiment, epoch, step))
 
+    t_epoch = time.time() - t_epoch
 
     # Save models each epochs
     testLoss, accuracy = val(crnn, test_dataset, criterion)
-    print("Epoch_LOG: Epoch:{},Test loss:{:>15},Accuracy:{:>15},Train loss:{:>15}".format(epoch, testLoss, accuracy, loss_avg_epoch.val()))
+    print("Epoch_LOG: Epoch:{},Test loss:{:>15},Accuracy:{:>15},Train loss:{:>15},Time:{:>10}".format(epoch, testLoss, accuracy, loss_avg_epoch.val(), t_epoch))
     logfile = open('{}/model.log'.format(opt.experiment), 'a')
-    logfile.write(json.dumps({'epoch': epoch, 'test loss': testLoss, 'accuracy': accuracy, 'train loss': loss_avg_epoch.val()})+'\n')
+    logfile.write(json.dumps({'epoch': epoch, 'test loss': testLoss, 'accuracy': accuracy, 'train loss': loss_avg_epoch.val(), 'time': t_epoch})+'\n')
     logfile.close()
     loss_avg_epoch.reset()
     torch.save(crnn.state_dict(), '{}/model_e{}.pth'.format(opt.experiment, epoch))
